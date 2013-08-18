@@ -16,7 +16,8 @@ my $builder = Module::Build->new(
         'Test::More' => 0,
     },
     requires => {
-        'AnyEvent' => 0
+        'AnyEvent' => 0,
+        'Carp' => 0
     },
     add_to_cleanup => [ 'AnyEvent-Promise-*' ],
     create_makefile_pl => 'traditional',

@@ -4,6 +4,9 @@ use 5.010;
 use strict;
 use warnings FATAL => 'all';
 
+use Try::Tiny qw//;
+use Carp;
+
 =head1 NAME
 
 AnyEvent::Promise - Evented promises
@@ -47,9 +50,20 @@ sub new {
     my ($class, $fulfill) = @_;
 
     my $self = bless {
+        guard => undef,
         fulfill => undef,
         reject => undef,
+        rejected => 0
     }, $class;
+
+    $self->{guard} = AnyEvent->condvar;
+
+    my $reject = AnyEvent->condvar;
+    $reject->cb(sub {
+        carp shift->recv;
+        $self->{guard}->send;
+    });
+    $self->{reject} = $reject;
 
     $self->try_fn($fulfill);
 
@@ -58,24 +72,43 @@ sub new {
 
 sub try_fn {
     my ($self, $fn) = @_;
-    # TODO Try here
-    my $cv = $fn->();
-    $self->{fulfill} = $cv;
+    Try::Tiny::try {
+        my $cv = $fn->();
+        $self->{fulfill} = $cv;
+    }
+    Try::Tiny::catch {
+        $self->{rejected} = 1;
+        $self->{reject}->send(@_);
+    }
 }
 
 sub then {
     my ($self, $fn) = @_;
 
+    return $self
+      if ($self->{rejected});
+
+    $self->{guard}->begin;
     my $cvin = $self->{fulfill};
     my $cvout = AnyEvent->condvar;
     $cvin->cb(sub {
-        my $ret = shift->recv;
-        my $cvret = $fn->($ret);
-        if ($cvret and ref $cvret eq 'AnyEvent::CondVar') {
-            $cvret->cb(sub { $cvout->send(shift->recv) });
+        my $thenret = shift;
+        Try::Tiny::try {
+            my $ret = $thenret->recv;
+            my $cvret = $fn->($ret);
+            if ($cvret and ref $cvret eq 'AnyEvent::CondVar') {
+                $cvret->cb(sub {
+                    $cvout->send(shift->recv);
+                    $self->{guard}->end;
+                });
+            }
+            else {
+                $cvout->send($cvret);
+            }
         }
-        else {
-            $cvout->send($cvret);
+        Try::Tiny::catch {
+            $self->{rejected} = 1;
+            $self->{reject}->send(@_);
         }
     });
     $self->{fulfill} = $cvout;
@@ -86,14 +119,19 @@ sub then {
 sub catch {
     my ($self, $fn) = @_;
 
-    $self->{reject} = $fn;
+    $self->{reject}->cb(sub {
+        my @err = shift->recv;
+        $fn->(@err);
+        $self->{guard}->send;
+    });
 
     return $self;
 }
 
 sub fulfill {
     my $self = shift;
-    $self->{fulfill}->recv;
+    $self->{guard}->recv;
+    return $self;
 }
 
 =head1 AUTHOR
