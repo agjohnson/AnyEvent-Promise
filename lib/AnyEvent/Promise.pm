@@ -98,12 +98,20 @@ sub then {
             my $cvret = $fn->($ret);
             if ($cvret and ref $cvret eq 'AnyEvent::CondVar') {
                 $cvret->cb(sub {
-                    $cvout->send(shift->recv);
-                    $self->{guard}->end;
+                    my $ret = shift;
+                    Try::Tiny::try {
+                        $cvout->send($ret->recv);
+                        $self->{guard}->end;
+                    }
+                    Try::Tiny::catch {
+                        $self->{rejected} = 1;
+                        $self->{reject}->send(@_);
+                    }
                 });
             }
             else {
                 $cvout->send($cvret);
+                $self->{guard}->end;
             }
         }
         Try::Tiny::catch {
