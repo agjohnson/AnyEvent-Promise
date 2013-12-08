@@ -1,6 +1,6 @@
 package AnyEvent::Promise;
 
-use 5.010;
+use 5.008;
 use strict;
 use warnings FATAL => 'all';
 
@@ -36,16 +36,45 @@ Avoid the evented pyramid of doom!
         $Redis->get('test');
     })->then(sub {
         say shift;
+    })->catch(sub {
+        say 'I failed!';
+        say @_;
     })->fulfill;
+
+=head1 DESCRIPTION
+
+L<AnyEvent::Promise> allows evented interfaces to be chained, taking away some
+of the redundancy of layering L<AnyEvent> condition variable callbacks.
+
+A promise is created using C<AnyEvent::Promise::new> or the exported C<promise>
+helper function. These will both return a promise instance and add the callback
+function as the start of the promise chain. Each call to C<then> on the promise
+instance will add a callback to the callback chain, and calling C<fulfill> on
+the instance will finally start the callback chain.
+
+# TODO will it block?
+
+Errors in the callbacks can be caught by setting an exception handler via the
+C<catch> method on the promise instance. This method will catch exceptions
+raised from L<AnyEvent> objects and exceptions raised in block provided to
+C<then>. If an error is encountered in the chain, an exception will be thrown
+and the rest of the chain will be skipped, jumping straight to the catch
+callback.
 
 =head1 EXPORT
 
-=head2 promise()
+=head2 promise($cb)
+
+Start promise chain with closure C<$cb>. This is a shortcut to
+C<AnyEvent::Promise::new>, and returns a promise object with callback attached.
 
 =cut
-
 sub promise { AnyEvent::Promise->new(@_) }
 
+=head1 METHODS
+
+=head2 new($cv)
+=cut
 sub new {
     my ($class, $fulfill) = @_;
 
@@ -65,12 +94,12 @@ sub new {
     });
     $self->{reject} = $reject;
 
-    $self->try_fn($fulfill);
+    $self->_try_fn($fulfill);
 
     return $self;
 }
 
-sub try_fn {
+sub _try_fn {
     my ($self, $fn) = @_;
     Try::Tiny::try {
         my $cv = $fn->();
@@ -81,6 +110,12 @@ sub try_fn {
         $self->{reject}->send(@_);
     }
 }
+
+=head2 then($cb)
+
+Wrap the top-most promise callback
+
+=cut
 
 sub then {
     my ($self, $fn) = @_;
@@ -124,6 +159,11 @@ sub then {
     return $self;
 }
 
+=head2 catch($cb)
+
+Catch raised errors in the callback chain
+
+=cut
 sub catch {
     my ($self, $fn) = @_;
 
@@ -136,6 +176,11 @@ sub catch {
     return $self;
 }
 
+=head2 fulfill()
+
+Start callback chain
+
+=cut
 sub fulfill {
     my $self = shift;
     $self->{guard}->recv;

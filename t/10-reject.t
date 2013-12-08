@@ -1,4 +1,4 @@
-use 5.010;
+use 5.008;
 use strict;
 use warnings;
 
@@ -6,7 +6,7 @@ use Test::More;
 use AnyEvent;
 use AnyEvent::Promise;
 
-plan tests => 9;
+plan tests => 11;
 
 # Test reject setup, fail outside callback
 my $p = AnyEvent::Promise->new(sub {
@@ -75,6 +75,35 @@ my $p1 = AnyEvent::Promise->new(sub {
 })->catch(sub {
     my $err = shift;
     ok($err =~ '^FAIL: INSIDE', 'Failure inside');
+});
+
+# Test catch die errors
+my $p2 = AnyEvent::Promise->new(sub {
+    my $cv = AnyEvent->condvar;
+    my $w; $w = AnyEvent->idle(
+        cb => sub {
+            $cv->send('foobar');
+            undef $w;
+        }
+    );
+    return $cv;
+})->then(sub {
+    my $ret = shift;
+    is($ret, 'foobar', 'Double then, first then return ok');
+
+    my $cv = AnyEvent->condvar;
+    die('FAIL: OUTSIDE');
+    my $w; $w = AnyEvent->idle(
+        cb => sub {
+            die('FAIL: INSIDE');
+        }
+    );
+    return $cv;
+})->then(sub {
+    fail('This callback should not run');
+})->catch(sub {
+    my $err = shift;
+    ok($err =~ '^FAIL: OUTSIDE', 'Catch outside failure');
 });
 
 $p1->fulfill;
