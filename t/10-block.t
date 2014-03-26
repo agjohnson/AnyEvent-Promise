@@ -52,7 +52,7 @@ my $p_out = AnyEvent::Promise->new(sub {
     return $cv;
 })->then(sub {
     check_order(4);
-    return $p_in->recv;
+    return $p_in->cv;
 });
 
 check_order(1);
