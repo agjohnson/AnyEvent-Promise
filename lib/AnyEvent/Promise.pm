@@ -4,6 +4,7 @@ use 5.008;
 use strict;
 use warnings FATAL => 'all';
 
+use AnyEvent;
 use Try::Tiny qw//;
 use Carp;
 
@@ -26,14 +27,14 @@ Avoid the evented pyramid of doom!
     use AnyEvent::Promise;
     use AnyEvent::Redis;
 
-    our $Redis = AnyEvent::Redis->new();
+    my $redis = AnyEvent::Redis->new();
 
     my $p = promise(sub {
-        $Redis->get('test');
+        $redis->get('test');
     })->then(sub {
-        $Redis->set('test', shift);
+        $redis->set('test', shift);
     })->then(sub {
-        $Redis->get('test');
+        $redis->get('test');
     })->then(sub {
         say shift;
     })->catch(sub {
@@ -46,18 +47,22 @@ Avoid the evented pyramid of doom!
 L<AnyEvent::Promise> allows evented interfaces to be chained, taking away some
 of the redundancy of layering L<AnyEvent> condition variable callbacks.
 
-A promise is created using C<AnyEvent::Promise::new> or the exported C<promise>
-helper function. These will both return a promise instance and add the callback
-function as the start of the promise chain. Each call to C<then> on the promise
-instance will add a callback to the callback chain, and calling C<fulfill> on
-the instance will finally start the callback chain.
+A promise is created using L<AnyEvent::Promise::new|/new> or the exported
+L</promise> helper function. These will both return a promise instance and add
+the callback function as the start of the promise chain. Each call to L</then>
+on the promise instance will add another subroutine which returns a condition
+variable to the chain.
 
-# TODO will it block?
+The promise callback chain won't start until L</condvar> or L</fulfill> is
+called on the instance. Calling L</condvar> or L</cv> will start the callback
+chain and return the promise guarding condvar, which is fulfilled after the last
+callback on the chain returns. Similarily, L</fulfill> will start the chain, but
+will block until the guarding condvar is fulfilled.
 
 Errors in the callbacks can be caught by setting an exception handler via the
-C<catch> method on the promise instance. This method will catch exceptions
-raised from L<AnyEvent> objects and exceptions raised in block provided to
-C<then>. If an error is encountered in the chain, an exception will be thrown
+L</catch> method on the promise instance. This method will catch exceptions
+raised from L<AnyEvent> objects and exceptions raised in blocks provided to
+L</then>. If an error is encountered in the chain, an exception will be thrown
 and the rest of the chain will be skipped, jumping straight to the catch
 callback.
 
@@ -65,18 +70,28 @@ callback.
 
 =head2 promise($cb)
 
-Start promise chain with closure C<$cb>. This is a shortcut to
-C<AnyEvent::Promise::new>, and returns a promise object with callback attached.
+Start promise chain with callback C<$cb>. This function is a shortcut to
+L<AnyEvent::Promise::new|/new>, and returns a promise object with the callback
+attached.
 
 =cut
 sub promise { AnyEvent::Promise->new(@_) }
 
+sub import {
+    no strict 'refs';  ## no critic (ProhibitNoStrict)
+    *{caller() . '::promise'} = \&promise;
+}
+
 =head1 METHODS
 
-=head2 new($cv)
+=head2 new($cb)
+
+Create an instance of a promise, start the chain off with callback C<$cb>. See
+L</then> for information on passing in a callback and condvar.
+
 =cut
 sub new {
-    my ($class, $fulfill) = @_;
+    my ($class, $cb) = @_;
 
     my $self = bless {
         guard => undef,
@@ -96,17 +111,50 @@ sub new {
     });
     $self->{reject} = $reject;
 
-    $self->then($fulfill);
+    $self->then($cb);
 
     return $self;
 }
 
 =head2 then($cb)
 
-Wrap the top-most promise callback
+Add callback C<$cb> on to the promise chain.
+
+This callback will receive the return of the previous callback -- i.e. the
+callback will receive the value sent by the previous condvar directly. In order
+to continue the promise chain, the callback should return a condvar.
+
+Instead of:
+
+    my $cv = $redis->get('test');
+    $cv->cb(sub {
+        my $ret = shift->recv;
+        my $cv2 = $redis->set('test', $ret);
+        $cv2->cb(sub {
+            my $cv3 = $redis->get('test');
+            $cv3->cb(sub {
+                my $ret3 = shift->recv;
+                printf("Got a value: %s\n", $ret3);
+            });
+        });
+    });
+    $cv->recv;
+
+.. a promise chain can be used, by chaining calls to the L</then> method:
+
+    my $promise = AnyEvent::Promise->new(sub {
+        $redis->get('test');
+    })->then(sub {
+        my $val = shift;
+        $redis->set('test', $val);
+    })->then(sub {
+        $redis->get('test');
+    })->then(sub {
+        my $val = shift;
+        printf("Got a value: %s\n", $val)
+    })->fulfill;
 
 =cut
-
 sub then {
     my ($self, $fn) = @_;
 
@@ -156,7 +204,10 @@ sub then {
 
 =head2 catch($cb)
 
-Catch raised errors in the callback chain
+Catch raised errors in the callback chain. Exceptions in the promise chain will
+jump up to this catch callback, bypassing any other callbacks in the promise
+chain. The error caught by L<Try::Tiny> will be sent as arguments to the
+callback C<$cb>.
 
 =cut
 sub catch {
@@ -171,32 +222,43 @@ sub catch {
     return $self;
 }
 
-=head2 fulfill()
+=head2 condvar(...)
 
-Start callback chain
+Trigger the start of the promise chain and return the guard condvar from the
+promise. The guard condvar is fulfilled either after the last callback returns
+or an exception is encountered somewhere in the chain.
+
+All arguments passed into L</condvar> are sent to the first condvar in the
+promise chain.
 
 =cut
-sub fulfill {
+sub condvar {
     my $self = shift;
-
     $self->{initial}->send(@_);
     $self->{fulfill}->cb(sub {
         $self->{guard}->send;
     });
-    $self->{guard}->recv;
-    return $self;
-}
-
-=head2 recv()
-
-Alias for fulfill
-
-=cut
-sub recv {
-    my $self = shift;
-    $self->{initial}->send(@_);
     return $self->{guard};
 };
+
+=head2 cv(...)
+
+Alias of L</condvar>
+
+=cut
+sub cv { condvar(@_) }
+
+=head2 fulfill(...)
+
+Similar to L</condvar>, trigger the start of the promise chain, but C<recv> on
+the returned condvar as well.
+
+=cut
+sub fulfill {
+    my $self = shift;
+    my $cv = $self->condvar(@_);
+    $cv->recv;
+}
 
 =head1 AUTHOR
 
