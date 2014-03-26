@@ -80,12 +80,14 @@ sub new {
 
     my $self = bless {
         guard => undef,
+        initial => undef,
         fulfill => undef,
         reject => undef,
         rejected => 0
     }, $class;
 
     $self->{guard} = AnyEvent->condvar;
+    $self->{initial} = AnyEvent->condvar;
 
     my $reject = AnyEvent->condvar;
     $reject->cb(sub {
@@ -94,21 +96,9 @@ sub new {
     });
     $self->{reject} = $reject;
 
-    $self->_try_fn($fulfill);
+    $self->then($fulfill);
 
     return $self;
-}
-
-sub _try_fn {
-    my ($self, $fn) = @_;
-    Try::Tiny::try {
-        my $cv = $fn->();
-        $self->{fulfill} = $cv;
-    }
-    Try::Tiny::catch {
-        $self->{rejected} = 1;
-        $self->{reject}->send(@_);
-    }
 }
 
 =head2 then($cb)
@@ -124,7 +114,12 @@ sub then {
       if ($self->{rejected});
 
     $self->{guard}->begin;
+
     my $cvin = $self->{fulfill};
+    if (!defined $cvin) {
+        $cvin = $self->{initial};
+    }
+
     my $cvout = AnyEvent->condvar;
     $cvin->cb(sub {
         my $thenret = shift;
@@ -133,9 +128,9 @@ sub then {
             my $cvret = $fn->($ret);
             if ($cvret and ref $cvret eq 'AnyEvent::CondVar') {
                 $cvret->cb(sub {
-                    my $ret = shift;
+                    my $ret_inner = shift;
                     Try::Tiny::try {
-                        $cvout->send($ret->recv);
+                        $cvout->send($ret_inner->recv);
                         $self->{guard}->end;
                     }
                     Try::Tiny::catch {
@@ -183,9 +178,25 @@ Start callback chain
 =cut
 sub fulfill {
     my $self = shift;
+
+    $self->{initial}->send(@_);
+    $self->{fulfill}->cb(sub {
+        $self->{guard}->send;
+    });
     $self->{guard}->recv;
     return $self;
 }
+
+=head2 recv()
+
+Alias for fulfill
+
+=cut
+sub recv {
+    my $self = shift;
+    $self->{initial}->send(@_);
+    return $self->{guard};
+};
 
 =head1 AUTHOR
 

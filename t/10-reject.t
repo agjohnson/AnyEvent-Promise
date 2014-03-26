@@ -107,3 +107,4 @@ my $p2 = AnyEvent::Promise->new(sub {
 });
 
 $p1->fulfill;
+$p2->fulfill;

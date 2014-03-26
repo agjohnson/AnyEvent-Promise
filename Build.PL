@@ -17,6 +17,7 @@ my $builder = Module::Build->new(
     },
     requires => {
         'AnyEvent' => 0,
+        'Try::Tiny' => 0,
         'Carp' => 0
     },
     add_to_cleanup => [ 'AnyEvent-Promise-*' ],
