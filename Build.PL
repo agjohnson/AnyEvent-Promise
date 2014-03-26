@@ -1,11 +1,11 @@
-use 5.010;
+use 5.008;
 use strict;
 use warnings FATAL => 'all';
 use Module::Build;
 
 my $builder = Module::Build->new(
     module_name => 'AnyEvent::Promise',
-    license => 'MIT',
+    license => 'mit',
     dist_author => q{Anthony Johnson <aj@ohess.org>},
     dist_version_from => 'lib/AnyEvent/Promise.pm',
     release_status => 'stable',
