@@ -6,7 +6,7 @@ use Test::More;
 use AnyEvent;
 use AnyEvent::Promise;
 
-plan tests => 9;
+plan tests => 10;
 
 # Test single then
 AnyEvent::Promise->new(sub {
@@ -77,3 +77,17 @@ my $p2 = $p1->then(sub {
 isa_ok($p2, 'AnyEvent::Promise');
 ok(defined $p2->{fulfill}, 'Second promise has callback');
 isa_ok($p2->{fulfill}, 'AnyEvent::CondVar', 'Second promise has callback event');
+
+# Test transferring multiple values through then
+AnyEvent::Promise->new(sub {
+    my $cv = AnyEvent->condvar;
+    my $w; $w = AnyEvent->idle(
+        cb => sub {
+            $cv->send(a => 2);
+            undef $w;
+        }
+    );
+    return $cv;
+})->then(sub {
+    is_deeply([@_], [a => 2], "2 results carried");
+})->fulfill;
