@@ -172,8 +172,8 @@ sub then {
     $cvin->cb(sub {
         my $thenret = shift;
         Try::Tiny::try {
-            my $ret = $thenret->recv;
-            my $cvret = $fn->($ret);
+            my @ret = $thenret->recv;
+            my $cvret = $fn->(@ret);
             if ($cvret and ref $cvret eq 'AnyEvent::CondVar') {
                 $cvret->cb(sub {
                     my $ret_inner = shift;
